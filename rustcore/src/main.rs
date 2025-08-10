@@ -11,13 +11,15 @@ use cell_def::{Cell, CellKind};
 // External Imports ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use tokio::net::TcpListener;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
-use futures_util::{StreamExt, SinkExt};
-use std::net::SocketAddr;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 
-use std::io::{self, BufRead, Write};
+use futures_util::{StreamExt, SinkExt};
+
+use std::io::{self, BufRead, Write, Read};
+use std::fs::File;
+use std::net::SocketAddr;
 
 use serde::{Serialize, Deserialize};
 use serde_json;
@@ -29,19 +31,20 @@ use serde_json;
 #[derive(Debug)]
 enum ServerState {
     Idle,
+    GeneratingWorld(usize), // World Generation in progress with size parameter
+    SavingWorld(String), // World Saving in progress with filename
+    LoadingWorld(String), // World Loading in progress with filename
     WorldRunning,
 }
 
 // Types of Commands
 #[derive(Debug)]
 enum Command {
-    LoadWorld,
-    SaveWorld,
-    GenerateWorld,
+    LoadWorld(String),
+    SaveWorld(String),
+    GenerateWorld(usize), // World Generated with size parameter
     StartWorldLoop,
     StopWorldLoop,
-    StartListener,
-    StopListener,
     Quit,
 }
 
@@ -56,6 +59,30 @@ enum UserInput{
     Build {soul_id: String, block_type: String, X: u32, Y: u32, dir: String, power: i16},
     UpdateBrain {soul_id: String, code: String},
     ReadBrain {soul_id: String},
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct WorldData {
+    pub world: Vec<Vec<u8>>, // Placeholder for world data
+    pub critter_layer: Vec<Vec<Cell>>, // Placeholder for critter layer
+    pub soul_locations: Vec<(String, u32, u32)>, // Placeholder for soul locations
+}
+
+impl WorldData {
+    pub fn save(&self, filename: &str) -> std::io::Result<()> {
+        let encoded = bincode::serialize(self).unwrap();
+        let mut file = File::create(filename)?;
+        file.write_all(&encoded)?;
+        Ok(())
+    }
+
+    pub fn load(filename: &str) -> std::io::Result<Self> {
+        let mut file = File::open(filename)?;
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer)?;
+        let state: WorldData = bincode::deserialize(&buffer).unwrap();
+        Ok(state)
+    }
 }
 
 // State Machine Transition Handler //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -73,7 +100,18 @@ impl ServerState {
                 println!("Stopping world loop...");
                 Idle
             }
-
+            (Idle, GenerateWorld(size)) => {
+                println!("Generating world with size: {}", size);
+                GeneratingWorld(size)
+            }
+            (Idle, SaveWorld(filename)) => {
+                println!("Saving world to file: {}", filename);
+                SavingWorld(filename)
+            }
+            (Idle, LoadWorld(filename)) => {
+                println!("Loading world from file: {}", filename);
+                LoadingWorld(filename)
+            }
             (state, cmd) => {
                 println!("Command {:?} invalid in state {:?}", cmd, state);
                 state
@@ -92,13 +130,27 @@ async fn main() {
     // Spawn a task to read user input commands from stdin
     let input_tx = cmd_tx.clone();
     tokio::spawn(async move {
-        let stdin = io::stdin();
-        for line in stdin.lock().lines() {
-            let line = line.unwrap();
-            let cmd = match line.trim().to_lowercase().as_str() {
-                "load_world" => Command::LoadWorld,
-                "save_world" => Command::SaveWorld,
-                "generate_world" => Command::GenerateWorld,
+        let mut input = String::new();
+
+        loop {
+            input.clear();
+            if io::stdin().read_line(&mut input).is_err() {
+                break;
+            }
+
+            let cmd = match input.trim().to_lowercase().as_str() {
+                "load_world" => {
+                    let filename = read_file_name();
+                    Command::LoadWorld(filename)
+                },
+                "save_world" => {
+                    let filename = read_file_name();
+                    Command::SaveWorld(filename)
+                },
+                "generate_world" => {
+                    let size = read_world_size();
+                    Command::GenerateWorld(size)
+                },
                 "start_world" => Command::StartWorldLoop,
                 "stop_world" => Command::StopWorldLoop,
                 "quit" => Command::Quit,
@@ -107,8 +159,9 @@ async fn main() {
                     continue;
                 }
             };
+
             if input_tx.send(cmd).is_err() {
-                break; // receiver dropped
+                break;
             }
         }
     });
@@ -119,10 +172,12 @@ async fn main() {
     let (tx, mut rx) = mpsc::unbounded_channel::<UserInput>();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut ws_task_handle: Option<tokio::task::JoinHandle<()>> = None;
-
-    // Placeholder for world and critter_layer with dimensions 2x2
-    let mut world = vec![vec![0u8; 2]; 2]; 
-    let mut critter_layer: Vec<Vec<Cell>> = vec![vec![Cell::empty(); 2]; 2];
+    
+    let mut world_data = WorldData {
+        world: vec![vec![0u8; 2]; 2], // Placeholder for world data
+        critter_layer: vec![vec![Cell::empty(); 2]; 2], // Placeholder for critter layer
+        soul_locations: Vec::new(), // Placeholder for soul locations
+    };
 
     // This is the server loop
     loop {
@@ -132,10 +187,6 @@ async fn main() {
             if let Command::Quit = cmd {
                 println!("Quitting server.");
                 return;
-            } else if let Command::GenerateWorld = cmd {
-                println!("Generating new world...");
-                let mut world_size = read_world_size();
-                world = utils::generate_world(world_size);
             } else {
                 println!("Received command: {:?}", cmd);
             }
@@ -156,6 +207,43 @@ async fn main() {
 
             sleep(Duration::from_millis(7000)).await;
 
+            }
+
+            ServerState::GeneratingWorld(size) => {
+                // Here you would add logic to generate the world
+                println!("Generating world of size: {}", size);
+               
+                // Initialize the world and critter_layer with the specified size
+                world_data.critter_layer = vec![vec![Cell::empty(); size]; size];
+                world_data.world = utils::generate_world(size);
+                // Transition to WorldRunning state after generating the world
+                state = ServerState::Idle;
+            }
+            ServerState::SavingWorld(filename) => {
+                // Here you would add logic to save the world
+                println!("Saving world to file: {}", filename);
+                if let Err(e) = world_data.save(&filename) {
+                    println!("Failed to save world: {}", e);
+                } else {
+                    println!("World saved successfully.");
+                }
+                // Transition back to Idle state after saving
+                state = ServerState::Idle;
+            }
+            ServerState::LoadingWorld(filename) => {
+                // Here you would add logic to load the world
+                println!("Loading world from file: {}", filename);
+                match WorldData::load(&filename) {
+                    Ok(loaded_world) => {
+                        world_data = loaded_world;
+                        println!("World loaded successfully.");
+                    }
+                    Err(e) => {
+                        println!("Failed to load world: {}", e);
+                    }
+                }
+                // Transition back to Idle state after loading
+                state = ServerState::Idle;
             }
             ServerState::WorldRunning => {
                 
@@ -214,16 +302,16 @@ async fn main() {
                 }
 
                 
-                utils::the_sun(&mut world);
+                utils::the_sun(&mut world_data.world);
 
                 println!("{:?}", build_que);
 
-                utils::build_critters(&mut critter_layer, &mut build_que);
+                utils::build_critters(&mut world_data.critter_layer, &mut build_que);
 
-                println!("World size: {}x{}", world.len(), world[0].len());
+                println!("World size: {}x{}", world_data.world.len(), world_data.world[0].len());
         
                 //utils::visualize_world_console(&world);
-                utils::visualize_critter_layer(&critter_layer);
+                utils::visualize_critter_layer(&world_data.critter_layer);
 
                 sleep(Duration::from_millis(10000)).await;
 
@@ -317,6 +405,24 @@ fn read_world_size() -> usize {
         match input.trim().parse::<usize>() {
             Ok(size) if size > 0 => return size,
             _ => println!("Please enter a valid positive integer."),
+        }
+    }
+}
+
+fn read_file_name() -> String {
+    loop {
+        print!("Enter File Name: ");
+        io::stdout().flush().unwrap(); // flush to show prompt immediately
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).unwrap();
+
+        let filename = input.trim();
+
+        if !filename.is_empty() {
+            return filename.to_string();
+        } else {
+            println!("Please enter a valid file name.");
         }
     }
 }

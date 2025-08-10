@@ -18,3 +18,5 @@ winit = "0.28"
 log = "0.4"
 env_logger = "0.10"
 
+bincode = "1.3"
+

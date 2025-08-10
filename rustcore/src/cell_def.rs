@@ -1,4 +1,8 @@
+use serde::{Serialize, Deserialize};
+
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize)]
   pub enum CellKind {
         Empty,
         Soul,
@@ -12,7 +16,7 @@
     }
 
 #[derive(Debug, Clone)]
-
+#[derive(Serialize, Deserialize)]
     pub struct Cell {
         pub id: String,
         pub kind: CellKind,
