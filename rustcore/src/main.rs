@@ -32,6 +32,8 @@ use uuid::Uuid;
 
 // Constant Definition /////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+const STARTING_ENERGY: i16 = 1000; // Starting energy for new souls
+
 // Variables/enums Definition //////////////////////////////////////////////////////////////////////////////////////////////////
 //Server states for FSM
 #[derive(Debug)]
@@ -345,6 +347,7 @@ async fn main() {
                 }
 
                 let mut build_que: Vec<UserInput> = Vec::new();
+                let mut generate_soul_que: Vec<UserInput> = Vec::new();
 
                 println!("World loop got {} messages:", batch.len());
                 for msg in batch {
@@ -353,8 +356,9 @@ async fn main() {
                         UserInput::Login { username, soul_id } => {
                             // Leave Blank! This type of message is handled in the WebSocket listener
                         },
-                        UserInput::GenerateSoul { soul_id } => {
+                        UserInput::GenerateSoul { ref soul_id } => {
                             println!("Generating soul with ID: {}", soul_id);
+                            generate_soul_que.push(msg); 
                             // Here you would add logic to generate a soul
                         }
                         UserInput::MountSoul { soul_id } => {
@@ -392,6 +396,8 @@ async fn main() {
                 utils::the_sun(&mut world_data.world);
 
                 println!("{:?}", build_que);
+
+                utils::generate_souls(&mut world_data, &generate_soul_que, STARTING_ENERGY);
 
                 utils::build_critters(&mut world_data.critter_layer, &mut build_que);
 

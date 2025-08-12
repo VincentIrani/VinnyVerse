@@ -7,6 +7,7 @@ use std::io::{self, Write};
 
 
 use crate::UserInput;
+use crate::WorldData;
 
 
 pub fn generate_world(size: usize) -> Vec<Vec<u8>> {
@@ -170,6 +171,7 @@ pub fn visualize_critter_layer(critter_layer: &Vec<Vec<Cell>>) {
         for cell in row {
             let c = match cell.kind {
                 CellKind::Tissue => 'T',
+                CellKind::Soul => 'S',
                 CellKind::Eyeball => 'O',
                 CellKind::Mouth => 'M',
                 CellKind::Butt => 'B',
@@ -185,7 +187,80 @@ pub fn visualize_critter_layer(critter_layer: &Vec<Vec<Cell>>) {
     }
 }
 
-pub fn activate_soul(){
+pub fn generate_souls(world_data: &mut WorldData, soul_que: & Vec<UserInput>, starting_energy: i16){
+    for input in soul_que.iter() {
+        
+        let mut soul_id_to_find = String::new();
+
+        if let UserInput::GenerateSoul { soul_id } = input {
+            soul_id_to_find = soul_id.clone();
+        } else {
+            // input was something else, handle or ignore
+        }
+
+        if let Some((soul, x, y)) = world_data.soul_locations.iter().find(|(soul, _, _)| *soul == soul_id_to_find) {
+            println!("Soul {} already exists!", soul);
+            continue; // Skip if soul already exists
+        }
+
+        let mut x_spawn = (rand::thread_rng().gen_range(0..world_data.world.len())) as usize;
+        let mut y_spawn = (rand::thread_rng().gen_range(0..world_data.world[0].len())) as usize;
+
+        let mut i = 0; // Counter to prevent infinite loop
+        while !is_empty_cell(&world_data, x_spawn.try_into().unwrap(), y_spawn.try_into().unwrap(), 3) && i < 100 {
+            // If the cell is not empty, find a new random position
+            x_spawn = rand::thread_rng().gen_range(0..world_data.world.len());
+            y_spawn = rand::thread_rng().gen_range(0..world_data.world[0].len());
+            i += 1; // Increment counter
+        }
+
+        if i >= 100 {
+            println!("Could not find an empty cell for soul {} after 100 attempts", soul_id_to_find);
+            continue; // Skip if no empty cell found after 100 attempts
+        }
+
+        // Create a new soul cell
+        let new_soul_cell = Cell::new(soul_id_to_find.clone(), CellKind::Soul, starting_energy, "C".to_string());
+        world_data.critter_layer[x_spawn][y_spawn] = new_soul_cell; // Place the soul in the critter layer
+        world_data.soul_locations.push((soul_id_to_find.clone(), x_spawn.try_into().unwrap(), y_spawn.try_into().unwrap())); // Add to soul locations
+        println!("Generated soul {} at ({}, {})", soul_id_to_find, x_spawn, y_spawn);
+    }
+    
+}
+
+pub fn is_empty_cell(world_data: &WorldData, x: usize, y: usize, r:usize) -> bool {
+    // Check if the coordinates are within bounds
+
+    println!("Checking if cell at ({}, {}) is empty within radius {}", x, y, r);
+
+    if x > world_data.world.len() || y > world_data.world[0].len() {
+        return false;
+    } else if x <= 0 || y <= 0 {
+        return false; 
+    }
+
+    let rows = world_data.world.len();
+    if rows == 0 {
+        return false; // Empty world
+    }
+
+    let cols = world_data.world[0].len();
+
+    // Calculate the boundaries for the radius search, clamp to world size
+    let start_x = x.saturating_sub(r); // avoid underflow
+    let end_x = (x + r).min(rows - 1);
+    let start_y = y.saturating_sub(r);
+    let end_y = (y + r).min(cols - 1);
+
+    for i in start_x..=end_x {
+        for j in start_y..=end_y {
+            if !world_data.critter_layer[i][j].is_empty() {
+                return false; // Found a non-empty cell
+            }
+        }
+    }
+
+    true // All cells in radius are empty
 
 }
 

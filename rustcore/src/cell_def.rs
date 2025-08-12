@@ -42,4 +42,8 @@ use serde::{Serialize, Deserialize};
                 orientation,
             }
         }
+
+        pub fn is_empty(&self) -> bool {
+            self.kind == CellKind::Empty
+        }
     }
