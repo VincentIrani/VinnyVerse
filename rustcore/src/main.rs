@@ -11,23 +11,29 @@ use cell_def::{Cell, CellKind};
 // External Imports ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 use tokio::net::TcpListener;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 
 use futures_util::{StreamExt, SinkExt};
 
-use std::io::{self, BufRead, Write, Read};
+use std::io::{self, BufRead, BufReader, Write, Read};
 use std::fs::File;
 use std::net::SocketAddr;
+use std::collections::HashSet;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde::{Serialize, Deserialize};
 use serde_json;
+use serde_json::Result;
+
+use uuid::Uuid;
 
 // Constant Definition /////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Variables/enums Definition //////////////////////////////////////////////////////////////////////////////////////////////////
-//Server states
+//Server states for FSM
 #[derive(Debug)]
 enum ServerState {
     Idle,
@@ -48,9 +54,11 @@ enum Command {
     Quit,
 }
 
+// typs of User Inputs
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type", content = "payload")]
 enum UserInput{
+    Login { username: String, soul_id: String },
     GenerateSoul {soul_id: String},
     MountSoul {soul_id: String},
     NameSoul {soul_id: String, name: String },
@@ -61,6 +69,75 @@ enum UserInput{
     ReadBrain {soul_id: String},
 }
 
+impl UserInput {
+    fn get_soul_id(&self) -> Option<&str> {
+        match self {
+            UserInput::Login { soul_id, .. } => Some(soul_id),
+            UserInput::GenerateSoul { soul_id } => Some(soul_id),
+            UserInput::MountSoul { soul_id } => Some(soul_id),
+            UserInput::NameSoul { soul_id, .. } => Some(soul_id),
+            UserInput::DismountSoul { soul_id } => Some(soul_id),
+            UserInput::Activate { soul_id, .. } => Some(soul_id),
+            UserInput::Build { soul_id, .. } => Some(soul_id),
+            UserInput::UpdateBrain { soul_id, .. } => Some(soul_id),
+            UserInput::ReadBrain { soul_id } => Some(soul_id),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct SessionInfo {
+    username: String,
+    soul_id: String,
+    tx: mpsc::UnboundedSender<String>, // Channel to send messages to the client
+}
+
+pub struct ServerData {
+    pub whitelist: HashMap<String, String>, // Whitelist of usernames
+    pub soul_id_to_credential: HashMap<String, String>, // Mapping from soul ID to credential
+    pub credential_to_session: HashMap<String, SessionInfo>,  // Mapping from credential to session info
+}
+
+impl ServerData {
+    fn new() -> Self {
+        ServerData {
+            whitelist: load_whitelist_from_json("whitelist.json").expect("Failed to load whitelist"),
+            soul_id_to_credential: HashMap::new(),
+            credential_to_session: HashMap::new(),
+        }
+    }
+    fn login(&mut self, username: String, soul_id: String, tx: mpsc::UnboundedSender<String>) -> std::result::Result<String, Box<dyn std::error::Error>> {
+        // Check whitelist
+        let is_allowed = self.whitelist.get(&username).map_or(false, |stored| stored == &soul_id);
+        if !is_allowed {
+            return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Invalid username or soul ID")));
+        }
+
+        // Remove old session for this soul ID (if any)
+        if let Some(old_cred) = self.soul_id_to_credential.remove(&soul_id) {
+            self.credential_to_session.remove(&old_cred);
+        }
+        
+        // Create a new credential
+        let credential = Uuid::new_v4().to_string();
+        let session = SessionInfo {
+            username: username.clone(),
+            soul_id: soul_id.clone(),
+            tx,
+        };
+
+        // Store mappings
+        self.soul_id_to_credential.insert(soul_id.clone(), credential.clone());
+        self.credential_to_session.insert(credential.clone(), session);
+
+        Ok(credential)
+    }
+    fn get_soulID(&mut self, credential: &str) -> Option<String> {
+        self.credential_to_session.get(credential).map(|session| session.soul_id.clone())
+    }
+}
+
+// World Data containing world layer, critter layer, and soul locations
 #[derive(Serialize, Deserialize)]
 pub struct WorldData {
     pub world: Vec<Vec<u8>>, // Placeholder for world data
@@ -68,6 +145,7 @@ pub struct WorldData {
     pub soul_locations: Vec<(String, u32, u32)>, // Placeholder for soul locations
 }
 
+// World Data Serialization and Deserialization
 impl WorldData {
     pub fn save(&self, filename: &str) -> std::io::Result<()> {
         let encoded = bincode::serialize(self).unwrap();
@@ -85,7 +163,7 @@ impl WorldData {
     }
 }
 
-// State Machine Transition Handler //////////////////////////////////////////////////////////////////////////////////////////////////
+// State Machine Transition Handler 
 impl ServerState {
     fn handle_command(self, command: Command) -> ServerState {
         use ServerState::*;
@@ -123,6 +201,11 @@ impl ServerState {
 // Main Loop ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #[tokio::main]
 async fn main() {
+
+    // Initialize the server data and clone it for use in the WebSocket listener
+    let server_data = Arc::new(Mutex::new(ServerData::new()));
+    let server_data_clone = Arc::clone(&server_data);
+
 
     // Create a channel for commands (could be from network or user input)
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<Command>();
@@ -252,7 +335,7 @@ async fn main() {
                     // Spawn the WebSocket listener task with necessary channels (tx, shutdown_rx)
                     let _ = shutdown_tx.send(false);
                     let shutdown_rx_clone = shutdown_rx.clone(); // clone receiver for the task
-                    ws_task_handle = Some(spawn_ws_listener(tx.clone(), shutdown_rx_clone));
+                    ws_task_handle = Some(spawn_ws_listener(tx.clone(), shutdown_rx_clone, server_data_clone.clone()));
                 }
 
                 // Drain all messages currently buffered in rx
@@ -266,6 +349,10 @@ async fn main() {
                 println!("World loop got {} messages:", batch.len());
                 for msg in batch {
                     match msg{
+
+                        UserInput::Login { username, soul_id } => {
+                            // Leave Blank! This type of message is handled in the WebSocket listener
+                        },
                         UserInput::GenerateSoul { soul_id } => {
                             println!("Generating soul with ID: {}", soul_id);
                             // Here you would add logic to generate a soul
@@ -325,12 +412,17 @@ async fn main() {
 pub fn spawn_ws_listener(
     tx: mpsc::UnboundedSender<UserInput>,
     mut shutdown_rx: watch::Receiver<bool>,
+    server_data: Arc<tokio::sync::Mutex<ServerData>>
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let listener = TcpListener::bind("127.0.0.1:9001").await.unwrap();
         println!("Server listening on 127.0.0.1:9001");
 
         loop {
+            
+            // cloning the server data in each loop
+            let server_data_import = server_data.clone();
+
             tokio::select! {
                 accept_result = listener.accept() => {
                     match accept_result {
@@ -347,19 +439,70 @@ pub fn spawn_ws_listener(
                                     }
                                 };
 
-                                let mut read = ws_stream;
+                                let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
-                                while let Some(msg_result) = read.next().await {
+                                let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<String>();
+
+                                // Spawned task to send messages to the client
+                                tokio::spawn(async move {
+                                    while let Some(msg) = outgoing_rx.recv().await {
+                                        if ws_sender.send(Message::Text(msg)).await.is_err() {
+                                            println!("Client disconnected, stopping sender task");
+                                            break;
+                                        }
+                                    }
+                                });
+
+                                // Per-client credential initialization
+                                let mut client_credential: Option<String> = None;
+                                let mut client_soul_id: Option<String> = None;
+
+                                while let Some(msg_result) = ws_receiver.next().await {
                                     match msg_result {
                                         Ok(msg) => {
                                             if msg.is_text() {
                                                 let text = msg.to_text().unwrap();
                                                 match serde_json::from_str::<UserInput>(text) {
                                                     Ok(user_input) => {
-                                                        if tx.send(user_input).is_err() {
-                                                            println!("Receiver dropped, closing client {}", addr);
-                                                            break;
+                                                        let mut server_data = server_data_import.lock().await;
+                                                        match user_input{
+                                                            UserInput::Login { username, soul_id } => {
+                                                                println!("User {} is trying to login with soul ID {}", username, soul_id);
+                                                                match server_data.login(username, soul_id, outgoing_tx.clone()) {
+                                                                    Ok(credential) => {
+                                                                        println!("User logged in with credential: {}", credential);
+                                                                        client_credential = Some(credential.clone());
+                                                                        client_soul_id = server_data.get_soulID(&credential);
+
+                                                                        // Send success message back to client
+                                                                        if outgoing_tx.send(credential).is_err() {
+                                                                            println!("Receiver dropped, closing client {}", addr);
+                                                                            break;
+                                                                        }
+                                                                    },
+                                                                    Err(e) => {
+                                                                        println!("Login failed: {}", e);
+                                                                        // Send error message back to client
+                                                                    }
+                                                                }
+                                                                
+
+                                                            },
+                                                            _ => {
+                                                                // Forward other user inputs
+                                                                if user_input.get_soul_id() == Some(client_soul_id.as_deref().unwrap_or("")) || user_input.get_soul_id() == Some(client_credential.as_deref().unwrap_or("")) {
+                                                                    
+                                                                    if tx.send(with_soul_id(user_input, client_soul_id.clone().unwrap_or_default())).is_err() {
+                                                                        println!("Receiver dropped, closing client {}", addr);
+                                                                        break;
+                                                                    }
+                                                                } else {
+                                                                    println!("Received input for a different soul ID, ignoring");
+                                                                    
+                                                                }
+                                                            }
                                                         }
+
                                                     }
                                                     Err(e) => {
                                                         println!("Failed to parse JSON from client {}: {}", addr, e);
@@ -424,5 +567,41 @@ fn read_file_name() -> String {
         } else {
             println!("Please enter a valid file name.");
         }
+    }
+}
+
+fn load_whitelist_from_json(path: &str) -> Result<HashMap<String, String>> {
+    let file = File::open(path).expect("Failed to open whitelist file");
+    let reader = BufReader::new(file);
+
+    // Deserialize into Vec<(String, String)>
+    let pairs: Vec<(String, String)> = serde_json::from_reader(reader)?;
+
+    // Convert vector of pairs into a HashMap
+    let whitelist_map: HashMap<String, String> = pairs.into_iter().collect();
+
+    Ok(whitelist_map)
+}
+
+fn with_soul_id(user_input: UserInput, new_soul_id: String) -> UserInput {
+    match user_input {
+        UserInput::Login { username, .. } => 
+            UserInput::Login { username, soul_id: new_soul_id },
+        UserInput::GenerateSoul { .. } => 
+            UserInput::GenerateSoul { soul_id: new_soul_id },
+        UserInput::MountSoul { .. } => 
+            UserInput::MountSoul { soul_id: new_soul_id },
+        UserInput::NameSoul { name, .. } => 
+            UserInput::NameSoul { soul_id: new_soul_id, name },
+        UserInput::DismountSoul { .. } => 
+            UserInput::DismountSoul { soul_id: new_soul_id },
+        UserInput::Activate { X, Y, power, .. } => 
+            UserInput::Activate { soul_id: new_soul_id, X, Y, power },
+        UserInput::Build { block_type, X, Y, dir, power, .. } => 
+            UserInput::Build { soul_id: new_soul_id, block_type, X, Y, dir, power },
+        UserInput::UpdateBrain { code, .. } => 
+            UserInput::UpdateBrain { soul_id: new_soul_id, code },
+        UserInput::ReadBrain { .. } => 
+            UserInput::ReadBrain { soul_id: new_soul_id },
     }
 }
