@@ -221,7 +221,7 @@ pub fn generate_souls(world_data: &mut WorldData, soul_que: & Vec<UserInput>, st
 
         // Create a new soul cell
         let new_soul_cell = Cell::new(soul_id_to_find.clone(), CellKind::Soul, starting_energy, "C".to_string());
-        world_data.critter_layer[x_spawn][y_spawn] = new_soul_cell; // Place the soul in the critter layer
+        world_data.critter_layer[y_spawn][x_spawn] = new_soul_cell; // Place the soul in the critter layer
         world_data.soul_locations.push((soul_id_to_find.clone(), x_spawn.try_into().unwrap(), y_spawn.try_into().unwrap())); // Add to soul locations
         println!("Generated soul {} at ({}, {})", soul_id_to_find, x_spawn, y_spawn);
     }
