@@ -8,6 +8,7 @@ use std::io::{self, Write};
 
 use crate::UserInput;
 use crate::WorldData;
+use crate::BalancingParams;
 
 
 pub fn generate_world(size: usize) -> Vec<Vec<u8>> {
@@ -264,6 +265,8 @@ pub fn is_empty_cell(world_data: &WorldData, x: usize, y: usize, r:usize) -> boo
 
 }
 
-pub fn mount_soul(){
-
+pub fn do_actions(world_data: &mut WorldData, action_que: & Vec<UserInput>, balancing_params: &BalancingParams){
+    for i in action_que{
+        println!("Processing action: {:?}", i);
+    }
 }

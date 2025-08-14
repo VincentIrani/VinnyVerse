@@ -32,7 +32,17 @@ use uuid::Uuid;
 
 // Constant Definition /////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-const STARTING_ENERGY: i16 = 1000; // Starting energy for new souls
+pub struct BalancingParams {
+    StartingEnergy: i16, // Energy new souls spawn with
+}
+
+impl BalancingParams {
+    pub fn new() -> Self {
+        BalancingParams {
+            StartingEnergy: 1000, // Default starting energy for new souls
+        }
+    }
+}
 
 // Variables/enums Definition //////////////////////////////////////////////////////////////////////////////////////////////////
 //Server states for FSM
@@ -62,10 +72,8 @@ enum Command {
 enum UserInput{
     Login { username: String, soul_id: String },
     GenerateSoul {soul_id: String},
-    MountSoul {soul_id: String},
     NameSoul {soul_id: String, name: String },
-    DismountSoul {soul_id: String}, 
-    Activate {soul_id: String, X: u32, Y: u32, power: i16},
+    Activate {soul_id: String, delay: u8, X: u32, Y: u32, power: i16},
     Build {soul_id: String, block_type: String, X: u32, Y: u32, dir: String, power: i16},
     UpdateBrain {soul_id: String, code: String},
     ReadBrain {soul_id: String},
@@ -76,13 +84,30 @@ impl UserInput {
         match self {
             UserInput::Login { soul_id, .. } => Some(soul_id),
             UserInput::GenerateSoul { soul_id } => Some(soul_id),
-            UserInput::MountSoul { soul_id } => Some(soul_id),
             UserInput::NameSoul { soul_id, .. } => Some(soul_id),
-            UserInput::DismountSoul { soul_id } => Some(soul_id),
             UserInput::Activate { soul_id, .. } => Some(soul_id),
             UserInput::Build { soul_id, .. } => Some(soul_id),
             UserInput::UpdateBrain { soul_id, .. } => Some(soul_id),
             UserInput::ReadBrain { soul_id } => Some(soul_id),
+        }
+    }
+
+    fn with_soul_id(self, new_soul_id: String) -> UserInput {
+        match self {
+            UserInput::Login { username, .. } => 
+                UserInput::Login { username, soul_id: new_soul_id },
+            UserInput::GenerateSoul { .. } => 
+                UserInput::GenerateSoul { soul_id: new_soul_id },
+            UserInput::NameSoul { name, .. } => 
+                UserInput::NameSoul { soul_id: new_soul_id, name },
+            UserInput::Activate { X, Y, power, delay, .. } => 
+                UserInput::Activate { soul_id: new_soul_id, delay, X, Y, power },
+            UserInput::Build { block_type, X, Y, dir, power, .. } => 
+                UserInput::Build { soul_id: new_soul_id, block_type, X, Y, dir, power },
+            UserInput::UpdateBrain { code, .. } => 
+                UserInput::UpdateBrain { soul_id: new_soul_id, code },
+            UserInput::ReadBrain { .. } => 
+                UserInput::ReadBrain { soul_id: new_soul_id },
         }
     }
 }
@@ -208,6 +233,7 @@ async fn main() {
     let server_data = Arc::new(Mutex::new(ServerData::new()));
     let server_data_clone = Arc::clone(&server_data);
 
+    let balancing_params = BalancingParams::new();
 
     // Create a channel for commands (could be from network or user input)
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<Command>();
@@ -348,6 +374,7 @@ async fn main() {
 
                 let mut build_que: Vec<UserInput> = Vec::new();
                 let mut generate_soul_que: Vec<UserInput> = Vec::new();
+                let mut action_que: Vec<UserInput> = Vec::new();
 
                 println!("World loop got {} messages:", batch.len());
                 for msg in batch {
@@ -361,20 +388,18 @@ async fn main() {
                             generate_soul_que.push(msg); 
                             // Here you would add logic to generate a soul
                         }
-                        UserInput::MountSoul { soul_id } => {
-                            println!("Mounting soul with ID: {}", soul_id);
-                            // Logic to mount a soul
-                        }
                         UserInput::NameSoul { soul_id, name } => {
                             println!("Naming soul: {}", name);
                             // Logic to name a soul
                         }
-                        UserInput::DismountSoul {soul_id}=> {
-                            println!("Dismounting current soul");
-                            // Logic to dismount a soul
-                        }
-                        UserInput::Activate {soul_id, X, Y, power } => {
-                            println!("Activating at ({}, {}), power: {}", X, Y, power);
+                        UserInput::Activate {soul_id, delay, X, Y, power, .. } => {
+                            
+                            // delaying actions for action sequences
+                            if delay > 0 {
+                                batch.push(UserInput::Activate { soul_id: msg.get_soul_id().unwrap_or_default().to_string(), delay: (delay - 1), X, Y, power });
+                            }
+
+                            action_que.push(msg);
                             // Logic to activate something in the world
                         }
                         UserInput::Build {ref soul_id, ref block_type, X, Y, ref dir, power } => {
@@ -397,9 +422,11 @@ async fn main() {
 
                 println!("{:?}", build_que);
 
-                utils::generate_souls(&mut world_data, &generate_soul_que, STARTING_ENERGY);
+                utils::generate_souls(&mut world_data, &generate_soul_que, balancing_params.StartingEnergy); //This function needs to know the starting energy, and pulls from balancing_params
 
                 utils::build_critters(&mut world_data.critter_layer, &mut build_que);
+
+                utils::do_actions(&mut world_data, &action_que, &balancing_params);
 
                 println!("World size: {}x{}", world_data.world.len(), world_data.world[0].len());
         
@@ -410,7 +437,6 @@ async fn main() {
 
             }
         }
-
 
     }
 }
@@ -498,7 +524,7 @@ pub fn spawn_ws_listener(
                                                                 // Forward other user inputs
                                                                 if user_input.get_soul_id() == Some(client_soul_id.as_deref().unwrap_or("")) || user_input.get_soul_id() == Some(client_credential.as_deref().unwrap_or("")) {
                                                                     
-                                                                    if tx.send(with_soul_id(user_input, client_soul_id.clone().unwrap_or_default())).is_err() {
+                                                                    if tx.send(user_input.with_soul_id(client_soul_id.clone().unwrap_or_default())).is_err() {
                                                                         println!("Receiver dropped, closing client {}", addr);
                                                                         break;
                                                                     }
@@ -587,27 +613,4 @@ fn load_whitelist_from_json(path: &str) -> Result<HashMap<String, String>> {
     let whitelist_map: HashMap<String, String> = pairs.into_iter().collect();
 
     Ok(whitelist_map)
-}
-
-fn with_soul_id(user_input: UserInput, new_soul_id: String) -> UserInput {
-    match user_input {
-        UserInput::Login { username, .. } => 
-            UserInput::Login { username, soul_id: new_soul_id },
-        UserInput::GenerateSoul { .. } => 
-            UserInput::GenerateSoul { soul_id: new_soul_id },
-        UserInput::MountSoul { .. } => 
-            UserInput::MountSoul { soul_id: new_soul_id },
-        UserInput::NameSoul { name, .. } => 
-            UserInput::NameSoul { soul_id: new_soul_id, name },
-        UserInput::DismountSoul { .. } => 
-            UserInput::DismountSoul { soul_id: new_soul_id },
-        UserInput::Activate { X, Y, power, .. } => 
-            UserInput::Activate { soul_id: new_soul_id, X, Y, power },
-        UserInput::Build { block_type, X, Y, dir, power, .. } => 
-            UserInput::Build { soul_id: new_soul_id, block_type, X, Y, dir, power },
-        UserInput::UpdateBrain { code, .. } => 
-            UserInput::UpdateBrain { soul_id: new_soul_id, code },
-        UserInput::ReadBrain { .. } => 
-            UserInput::ReadBrain { soul_id: new_soul_id },
-    }
 }
