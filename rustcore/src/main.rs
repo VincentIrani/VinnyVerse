@@ -73,8 +73,8 @@ enum UserInput{
     Login { username: String, soul_id: String },
     GenerateSoul {soul_id: String},
     NameSoul {soul_id: String, name: String },
-    Activate {soul_id: String, delay: u8, X: u32, Y: u32, power: i16},
-    Build {soul_id: String, block_type: String, X: u32, Y: u32, dir: String, power: i16},
+    Activate {soul_id: String, delay: u8, X: i32, Y: i32, power: i16},
+    Build {soul_id: String, block_type: String, X: i32, Y: i32, dir: String, power: i16},
     UpdateBrain {soul_id: String, code: String},
     ReadBrain {soul_id: String},
 }
@@ -110,6 +110,50 @@ impl UserInput {
                 UserInput::ReadBrain { soul_id: new_soul_id },
         }
     }
+
+    fn local_to_global(self, world_data: &WorldData) -> UserInput {
+        match self {
+            UserInput::Activate { soul_id, X, Y, delay, power } => {
+                let (new_x, new_y) = if let Some((_, sx, sy)) =
+                    world_data.soul_locations.iter().find(|(s, _, _)| s == &soul_id)
+                {
+                    (*sx as i32 + X, *sy as i32 - Y)
+                } else {
+                    println!("Soul ID {} not found in world data", soul_id);
+                    (X, Y)
+                };
+
+                UserInput::Activate {
+                    soul_id,
+                    X: new_x,
+                    Y: new_y,
+                    delay,
+                    power,
+                }
+            }
+            UserInput::Build { soul_id, X, Y, block_type, dir, power } => {
+                let (new_x, new_y) = if let Some((_, sx, sy)) =
+                    world_data.soul_locations.iter().find(|(s, _, _)| s == &soul_id)
+                {
+                    (*sx as i32 + X, *sy as i32 - Y)
+                } else {
+                    println!("Soul ID {} not found in world data", soul_id);
+                    (X, Y)
+                };
+
+                UserInput::Build {
+                    soul_id,
+                    X: new_x,
+                    Y: new_y,
+                    block_type,
+                    dir,
+                    power,
+                }
+            }
+            _ => self, // other variants unchanged
+        }
+    }
+
 }
 
 #[derive(Debug)]
@@ -290,6 +334,8 @@ async fn main() {
         soul_locations: Vec::new(), // Placeholder for soul locations
     };
 
+    
+
     // This is the server loop
     loop {
 
@@ -392,19 +438,23 @@ async fn main() {
                             println!("Naming soul: {}", name);
                             // Logic to name a soul
                         }
-                        UserInput::Activate {soul_id, delay, X, Y, power, .. } => {
-                            
+                        UserInput::Activate {ref soul_id, delay, X, Y, power, .. } => {
                             // delaying actions for action sequences
                             if delay > 0 {
-                                batch.push(UserInput::Activate { soul_id: msg.get_soul_id().unwrap_or_default().to_string(), delay: (delay - 1), X, Y, power });
+                                tx.send(UserInput::Activate {
+                                    soul_id: soul_id.clone(),
+                                    delay: delay - 1,
+                                    X,
+                                    Y,
+                                    power,
+                                }).unwrap();
+                            } else {
+                                action_que.push(msg.local_to_global(&world_data));
                             }
-
-                            action_que.push(msg);
-                            // Logic to activate something in the world
                         }
                         UserInput::Build {ref soul_id, ref block_type, X, Y, ref dir, power } => {
                             println!("Building {} at ({}, {}), direction: {}, power: {}", block_type, X, Y, dir, power);
-                            build_que.push(msg);
+                            build_que.push(msg.local_to_global(&world_data) );
                         }
                         UserInput::UpdateBrain {soul_id, code } => {
                             println!("Updating brain with code: {}", code);

@@ -19,6 +19,7 @@ async def Arcive_agent():
                 break
 
             # Example: Build {"soul_id":"acsoinnaesoc","block_type":"Mouth","X":1,"Y":1,"dir":"N","power":50}
+            # Example: Activate {"soul_id":"acsoinnaesoc","delay":0,"X":1,"Y":1,"power":50}
             try:
                 type_and_payload = user_input.split(" ", 1)
                 msg_type = type_and_payload[0]

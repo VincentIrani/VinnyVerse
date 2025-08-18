@@ -262,11 +262,51 @@ pub fn is_empty_cell(world_data: &WorldData, x: usize, y: usize, r:usize) -> boo
     }
 
     true // All cells in radius are empty
-
 }
 
 pub fn do_actions(world_data: &mut WorldData, action_que: & Vec<UserInput>, balancing_params: &BalancingParams){
-    for i in action_que{
-        println!("Processing action: {:?}", i);
+    for action in action_que{
+        let UserInput::Activate { soul_id, delay, X, Y, power } = action else {
+          continue;
+        };
+
+        //Checks befor activating cell
+        if world_data.critter_layer[*Y as usize][*X as usize].is_empty() {
+            println!("Cell at ({}, {}) is empty", X, Y); //eventually this should be returned to user!!
+            continue;
+        } else if world_data.critter_layer[*Y as usize][*X as usize].id != *soul_id {
+            println!("Cell at ({}, {}) is not owned by you!", X, Y);
+            continue;
+        }
+
+        match world_data.critter_layer[*Y as usize][*X as usize].kind {
+            CellKind::Soul => {
+                println!("Cell at ({}, {}) is a soul, not a valid target", X, Y);
+            },
+            CellKind::Tissue => {
+                println!("Cell at ({}, {}) is a tissue, not a valid target", X, Y);
+            },
+            CellKind::Eyeball => {
+                println!("Cell at ({}, {}) is an eyeball", X, Y);
+            },
+            CellKind::Mouth => {
+                println!("Cell at ({}, {}) is a mouth", X, Y);
+            },
+            CellKind::Butt => {
+                println!("Cell at ({}, {}) is a butt", X, Y);
+            },
+            CellKind::Muscle => {
+                println!("Cell at ({}, {}) is a muscle", X, Y);
+            },
+            CellKind::Armor => {
+                println!("Cell at ({}, {}) is an armor, not a valid target", X, Y);
+            },
+            CellKind::Anchor => {
+                println!("Cell at ({}, {}) is an anchor", X, Y);
+            },
+            _ => {
+                println!("Cell at ({}, {}) is not a valid target", X, Y);
+            }
+        }
     }
 }
