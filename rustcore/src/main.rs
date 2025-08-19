@@ -5,6 +5,7 @@
 // File Imports ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 mod utils;
 mod cell_def;
+mod visual_pkg_generator;
 
 use cell_def::{Cell, CellKind};
 
@@ -160,7 +161,7 @@ impl UserInput {
 struct SessionInfo {
     username: String,
     soul_id: String,
-    tx: mpsc::UnboundedSender<String>, // Channel to send messages to the client
+    tx: mpsc::UnboundedSender<Message>, // Channel to send messages to the client
 }
 
 pub struct ServerData {
@@ -177,7 +178,7 @@ impl ServerData {
             credential_to_session: HashMap::new(),
         }
     }
-    fn login(&mut self, username: String, soul_id: String, tx: mpsc::UnboundedSender<String>) -> std::result::Result<String, Box<dyn std::error::Error>> {
+    fn login(&mut self, username: String, soul_id: String, tx: mpsc::UnboundedSender<Message>) -> std::result::Result<String, Box<dyn std::error::Error>> {
         // Check whitelist
         let is_allowed = self.whitelist.get(&username).map_or(false, |stored| stored == &soul_id);
         if !is_allowed {
@@ -206,6 +207,16 @@ impl ServerData {
     fn get_soulID(&mut self, credential: &str) -> Option<String> {
         self.credential_to_session.get(credential).map(|session| session.soul_id.clone())
     }
+
+    fn get_credential(&self, soul_id: &str) -> Option<String> {
+        self.soul_id_to_credential.get(soul_id).cloned()
+    }
+
+    fn get_tx_channel(&self, soul_id: &str) -> Option<mpsc::UnboundedSender<Message>> {
+        self.credential_to_session
+            .get(&self.get_credential(soul_id).unwrap())
+            .map(|session| session.tx.clone())  // clone happens here
+    }
 }
 
 // World Data containing world layer, critter layer, and soul locations
@@ -231,6 +242,14 @@ impl WorldData {
         file.read_to_end(&mut buffer)?;
         let state: WorldData = bincode::deserialize(&buffer).unwrap();
         Ok(state)
+    }
+
+    pub fn global_to_local(&self, soul_id: &String, x: i32, y: i32) -> (i32, i32) {
+        // Find the soul's location in the world
+        if let Some((_, local_x, local_y)) = self.soul_locations.iter().find(|(id, _, _)| id == soul_id) {
+            return (x - *local_x as i32, y + *local_y as i32);
+        }
+        (x, y)
     }
 }
 
@@ -362,7 +381,7 @@ async fn main() {
                 handle.await.unwrap();
             }
 
-            sleep(Duration::from_millis(7000)).await;
+            sleep(Duration::from_millis(2000)).await;
 
             }
 
@@ -449,7 +468,9 @@ async fn main() {
                                     power,
                                 }).unwrap();
                             } else {
+                                print!("Activating {} at ({}, {}), power: {}", soul_id, X, Y, power);
                                 action_que.push(msg.local_to_global(&world_data));
+                                println!("Action Que: {:?}", action_que);
                             }
                         }
                         UserInput::Build {ref soul_id, ref block_type, X, Y, ref dir, power } => {
@@ -476,7 +497,7 @@ async fn main() {
 
                 utils::build_critters(&mut world_data.critter_layer, &mut build_que);
 
-                utils::do_actions(&mut world_data, &action_que, &balancing_params);
+                utils::do_actions(&mut world_data, &action_que, &balancing_params, &server_data).await;
 
                 println!("World size: {}x{}", world_data.world.len(), world_data.world[0].len());
         
@@ -523,12 +544,12 @@ pub fn spawn_ws_listener(
 
                                 let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
-                                let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<String>();
+                                let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<Message>();
 
                                 // Spawned task to send messages to the client
                                 tokio::spawn(async move {
                                     while let Some(msg) = outgoing_rx.recv().await {
-                                        if ws_sender.send(Message::Text(msg)).await.is_err() {
+                                        if ws_sender.send(msg).await.is_err() {
                                             println!("Client disconnected, stopping sender task");
                                             break;
                                         }
@@ -557,7 +578,7 @@ pub fn spawn_ws_listener(
                                                                         client_soul_id = server_data.get_soulID(&credential);
 
                                                                         // Send success message back to client
-                                                                        if outgoing_tx.send(credential).is_err() {
+                                                                        if outgoing_tx.send(Message::Text(credential)).is_err() {
                                                                             println!("Receiver dropped, closing client {}", addr);
                                                                             break;
                                                                         }

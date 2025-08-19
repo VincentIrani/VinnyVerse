@@ -1,15 +1,19 @@
 use rand::Rng;
 
 use crate::cell_def;
+use crate::visual_pkg_generator;
 
 use cell_def::{Cell, CellKind};
 use std::io::{self, Write};
-
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::UserInput;
 use crate::WorldData;
 use crate::BalancingParams;
+use crate::ServerData;
 
+use tungstenite::protocol::Message;
 
 pub fn generate_world(size: usize) -> Vec<Vec<u8>> {
     let mut rng = rand::thread_rng();
@@ -264,10 +268,11 @@ pub fn is_empty_cell(world_data: &WorldData, x: usize, y: usize, r:usize) -> boo
     true // All cells in radius are empty
 }
 
-pub fn do_actions(world_data: &mut WorldData, action_que: & Vec<UserInput>, balancing_params: &BalancingParams){
+pub async fn do_actions(world_data: &mut WorldData, action_que: & Vec<UserInput>, balancing_params: &BalancingParams, server_data: &Arc<tokio::sync::Mutex<ServerData>>){
     for action in action_que{
         let UserInput::Activate { soul_id, delay, X, Y, power } = action else {
-          continue;
+            println!("Invalid action: {:?}", action);
+            continue;
         };
 
         //Checks befor activating cell
@@ -284,10 +289,23 @@ pub fn do_actions(world_data: &mut WorldData, action_que: & Vec<UserInput>, bala
                 println!("Cell at ({}, {}) is a soul, not a valid target", X, Y);
             },
             CellKind::Tissue => {
-                println!("Cell at ({}, {}) is a tissue, not a valid target", X, Y);
+                println!("That cell is a tissue, not a valid target");
+                let tx = server_data.lock().await.get_tx_channel(soul_id);
+                if let Some(tx) = tx {
+                    tx.send(Message::Text(format!("That cell is a tissue, not a valid target")));
+                }
             },
             CellKind::Eyeball => {
                 println!("Cell at ({}, {}) is an eyeball", X, Y);
+
+                let visual_pkg = visual_pkg_generator::generate_visual_pkg(&world_data, soul_id, X, Y, 3, 'N', 50.0);
+                // Send the visual package to the client
+                let tx = server_data.lock().await.get_tx_channel(soul_id);
+                if let Some(tx) = tx {
+                    if let Err(e) = tx.send(Message::Binary(visual_pkg)) {
+                        eprintln!("Failed to send visual package: {}", e);
+                    }
+                }
             },
             CellKind::Mouth => {
                 println!("Cell at ({}, {}) is a mouth", X, Y);
@@ -310,3 +328,4 @@ pub fn do_actions(world_data: &mut WorldData, action_que: & Vec<UserInput>, bala
         }
     }
 }
+
