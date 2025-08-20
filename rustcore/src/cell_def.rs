@@ -15,6 +15,23 @@ use serde::{Serialize, Deserialize};
         Armor,
     }
 
+impl CellKind {
+    pub fn from_input_string(input_string: &str) -> Option<Self> {
+        match input_string {
+            "Empty" => Some(CellKind::Empty),
+            "Soul" => Some(CellKind::Soul),
+            "Tissue" => Some(CellKind::Tissue),
+            "Eyeball" => Some(CellKind::Eyeball),
+            "Mouth" => Some(CellKind::Mouth),
+            "Butt" => Some(CellKind::Butt),
+            "Muscle" => Some(CellKind::Muscle),
+            "Anchor" => Some(CellKind::Anchor),
+            "Armor" => Some(CellKind::Armor),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 #[derive(Serialize, Deserialize)]
     pub struct Cell {
@@ -45,5 +62,12 @@ use serde::{Serialize, Deserialize};
 
         pub fn is_empty(&self) -> bool {
             self.kind == CellKind::Empty
+        }
+
+        pub fn valid_dir(direction: &str) -> bool {
+            match direction {
+                "N" | "S" | "E" | "W" | "C" => true,
+                _ => false,
+            }
         }
     }

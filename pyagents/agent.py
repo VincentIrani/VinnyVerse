@@ -63,7 +63,14 @@ async def agent():
             while True:
                 try:
                     msg = await websocket.recv()
-                    print(f"\nReceived from server: {msg}")
+                    if isinstance(msg, bytes):
+                        try:
+                            data = json.loads(msg.decode('utf-8'))
+                            print("Received JSON:", data)
+                        except json.JSONDecodeError:
+                            print("not valid JSON:", msg)
+                    else:
+                        print("Received non-JSON message:", msg)
                 except websockets.ConnectionClosed:
                     print("Server closed the connection.")
                     break

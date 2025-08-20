@@ -20,6 +20,7 @@ use futures_util::{StreamExt, SinkExt};
 
 use std::io::{self, BufRead, BufReader, Write, Read};
 use std::fs::File;
+use std::fs;
 use std::net::SocketAddr;
 use std::collections::HashSet;
 use std::collections::HashMap;
@@ -33,14 +34,33 @@ use uuid::Uuid;
 
 // Constant Definition /////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-pub struct BalancingParams {
+#[derive(Deserialize, Debug)]
+pub struct BPs {
+    //General
     StartingEnergy: i16, // Energy new souls spawn with
+
+    //Eyeball Related
+    DirectionalEyeballFOV: i16, //Definfines the FOV angle of a directional Eyeball
+    C_EEtoAE: i16, // How much stored Eyeball Energy is needed for 1 input action energy. Ex. If C_E is 5, if you want to trigger the eyeball with 1 energy, 5 needs to be in EE
+    C_E_percent: i16, //defines percent window of eyeball triggerability. Ex: if C_E_percent is 20, then the eyeball can be triggered with a minimum of .8 energy if 1 is max.
+    C_AEtoAction_dir: i16, //Scales activation energy to visual package size for directional eyes
+    C_AEtoAction_cent: i16, //Scales activation energy to visual package size for centered eyes
 }
 
-impl BalancingParams {
+
+impl BPs { //BalancingParameters
     pub fn new() -> Self {
-        BalancingParams {
-            StartingEnergy: 1000, // Default starting energy for new souls
+        let config_path = "config.toml";
+
+        let params = fs::read_to_string(config_path)
+            .ok() // ignore read errors
+            .and_then(|contents| toml::from_str::<BPs>(&contents).ok());
+
+        match params {
+            Some(p) => p,
+            None => {
+                panic!("Failed to load config from {}. Please create the file.", config_path);
+            }
         }
     }
 }
@@ -247,9 +267,23 @@ impl WorldData {
     pub fn global_to_local(&self, soul_id: &String, x: i32, y: i32) -> (i32, i32) {
         // Find the soul's location in the world
         if let Some((_, local_x, local_y)) = self.soul_locations.iter().find(|(id, _, _)| id == soul_id) {
-            return (x - *local_x as i32, y + *local_y as i32);
+
+            println!("Global coordinates ({}, {}) and soul location global coordinates ({}, {})", x, y, (*local_x as i32), (*local_y as i32));
+            println!("Local coordinates ({}, {})", (x as i32) - (*local_x as i32), (y as i32) - (*local_y as i32));
+            return ( (x as i32) - (*local_x as i32), (y as i32) - (*local_y as i32));
         }
         (x, y)
+    }
+
+    pub fn is_critter_at(&self, x: i32, y: i32) -> bool {
+        if self.critter_layer[x as usize][y as usize].is_empty() {
+            return false;
+        }
+        true
+    }
+
+    pub fn is_in_bounds(&self, x: i32, y: i32) -> bool {
+        x >= 0 && x < self.world.len() as i32 && y >= 0 && y < self.world[0].len() as i32
     }
 }
 
@@ -296,7 +330,7 @@ async fn main() {
     let server_data = Arc::new(Mutex::new(ServerData::new()));
     let server_data_clone = Arc::clone(&server_data);
 
-    let balancing_params = BalancingParams::new();
+    let balancing_params = BPs::new();
 
     // Create a channel for commands (could be from network or user input)
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<Command>();
@@ -352,8 +386,6 @@ async fn main() {
         critter_layer: vec![vec![Cell::empty(); 2]; 2], // Placeholder for critter layer
         soul_locations: Vec::new(), // Placeholder for soul locations
     };
-
-    
 
     // This is the server loop
     loop {
@@ -491,11 +523,13 @@ async fn main() {
                 
                 utils::the_sun(&mut world_data.world);
 
+                utils::visualize_world_console(&world_data.world);
+
                 println!("{:?}", build_que);
 
                 utils::generate_souls(&mut world_data, &generate_soul_que, balancing_params.StartingEnergy); //This function needs to know the starting energy, and pulls from balancing_params
 
-                utils::build_critters(&mut world_data.critter_layer, &mut build_que);
+                utils::build_critters(&mut world_data.critter_layer, &mut build_que, &balancing_params);
 
                 utils::do_actions(&mut world_data, &action_que, &balancing_params, &server_data).await;
 

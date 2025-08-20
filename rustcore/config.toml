@@ -1,0 +1,9 @@
+# General
+StartingEnergy = 1000
+
+# Eyeball Related
+DirectionalEyeballFOV = 30
+C_EEtoAE = 10
+C_E_percent = 20
+C_AEtoAction_dir = 50
+C_AEtoAction_cent = 100 # Units of Action energy / radius

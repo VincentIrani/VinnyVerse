@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 
 use crate::UserInput;
 use crate::WorldData;
-use crate::BalancingParams;
+use crate::BPs;
 use crate::ServerData;
 
 use tungstenite::protocol::Message;
@@ -87,7 +87,7 @@ pub fn the_sun(world: &mut Vec<Vec<u8>>) {
     }
 }
 
-pub fn build_critters(critter_layer: &mut Vec<Vec<Cell>>, build_que: &mut Vec<UserInput>) {
+pub fn build_critters(critter_layer: &mut Vec<Vec<Cell>>, build_que: &mut Vec<UserInput>, b_ps: &BPs) {
     for input in build_que.iter() {
         if let UserInput::Build {
             soul_id,
@@ -98,75 +98,69 @@ pub fn build_critters(critter_layer: &mut Vec<Vec<Cell>>, build_que: &mut Vec<Us
             power,
         } = input
         {
+            //Input checking and assignment
+            let Some(cell_kind) = CellKind::from_input_string(block_type) else {
+                println!("Invalid block type: {}", block_type);
+                continue;
+            };
+
+            let direction = dir.clone();
+            if !Cell::valid_dir(direction.as_str()) {
+                println!("Invalid direction: {}", dir);
+                continue;
+            }
+
             // Bounds check
             if *Y as usize >= critter_layer.len() || *X as usize >= critter_layer[0].len() {
                 println!("Build request out of bounds: ({}, {})", X, Y);
                 continue;
             }
 
-            if critter_layer[*Y as usize][*X as usize].kind != CellKind::Empty {
+            let existing_cell = &critter_layer[*Y as usize][*X as usize];
+            if existing_cell.kind == cell_kind && existing_cell.id == *soul_id{
+                //If the build is on an existing cell, modify energy
+                critter_layer[*Y as usize][*X as usize].energy += *power;
+            }
+            else if existing_cell.kind != CellKind::Empty {
+                //If the existing cell is not empty, error out
                 println!("Cell at ({}, {}) is not empty, cannot build", X, Y);
                 continue;
-            }
+            } else {
+                //Check if cell is valid for building a new cell and build it
+                let mut can_build = false;
+                let size = critter_layer.len();
+                let x = *X as isize;
+                let y = *Y as isize;
+                let directions = [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)];
 
-            let mut can_build = false;
-            let size = critter_layer.len();
-            let x = *X as isize;
-            let y = *Y as isize;
-            let directions = [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)];
-
-            for (dx, dy) in directions.iter() {
-                let nx = x + dx;
-                let ny = y + dy;
-                if nx >= 0 && nx < size as isize && ny >= 0 && ny < size as isize {
-                    let neighbor = &critter_layer[ny as usize][nx as usize];
-                    if neighbor.kind == CellKind::Tissue
-                        || (neighbor.kind == CellKind::Soul && neighbor.id == *soul_id)
-                    {
-                        can_build = true;
-                        break;
+                for (dx, dy) in directions.iter() {
+                    let nx = x + dx;
+                    let ny = y + dy;
+                    if nx >= 0 && nx < size as isize && ny >= 0 && ny < size as isize {
+                        let neighbor = &critter_layer[ny as usize][nx as usize];
+                        if neighbor.kind == CellKind::Tissue
+                            || (neighbor.kind == CellKind::Soul && neighbor.id == *soul_id)
+                        {
+                            can_build = true;
+                            break;
+                        }
                     }
                 }
-            }
 
-            if !can_build {
-                println!(
-                    "Cannot build at ({}, {}): no adjacent Tissue or matching Soul cell",
-                    X, Y
-                );
-                continue;
-            }
-
-            // Match block_type to CellKind
-            let cell_kind = match block_type.as_str() {
-                "Tissue" => CellKind::Tissue,
-                "Eyeball" => CellKind::Eyeball,
-                "Mouth" => CellKind::Mouth,
-                "Butt" => CellKind::Butt,
-                "Muscle" => CellKind::Muscle,
-                "Anchor" => CellKind::Anchor,
-                "Armor" => CellKind::Armor,
-                _ => {
-                    println!("Unknown block type: {}", block_type);
+                if !can_build {
+                    println!(
+                        "Cannot build at ({}, {}): no adjacent Tissue or matching Soul cell",
+                        X, Y
+                    );
                     continue;
                 }
-            };
 
-            let direction = match dir.as_str() {
-                "N" => "N".to_string(),
-                "S" => "S".to_string(),
-                "E" => "E".to_string(),
-                "W" => "W".to_string(),
-                "C" => "C".to_string(),
-                _ => {
-                    println!("Unknown direction: {}", dir);
-                    continue;
-                }
-            };
+                let cell_kind = CellKind::from_input_string(block_type).expect("Invalid block type");
 
-            // Place the cell
-            critter_layer[*Y as usize][*X as usize] =
-                Cell::new(soul_id.clone(), cell_kind, *power, direction.clone());
+                // Place the cell
+                critter_layer[*Y as usize][*X as usize] =
+                    Cell::new(soul_id.clone(), cell_kind, *power, direction.clone());
+            }
         }
     }
 }
@@ -268,7 +262,7 @@ pub fn is_empty_cell(world_data: &WorldData, x: usize, y: usize, r:usize) -> boo
     true // All cells in radius are empty
 }
 
-pub async fn do_actions(world_data: &mut WorldData, action_que: & Vec<UserInput>, balancing_params: &BalancingParams, server_data: &Arc<tokio::sync::Mutex<ServerData>>){
+pub async fn do_actions(world_data: &mut WorldData, action_que: & Vec<UserInput>, b_ps: &BPs, server_data: &Arc<tokio::sync::Mutex<ServerData>>){
     for action in action_que{
         let UserInput::Activate { soul_id, delay, X, Y, power } = action else {
             println!("Invalid action: {:?}", action);
@@ -297,8 +291,28 @@ pub async fn do_actions(world_data: &mut WorldData, action_que: & Vec<UserInput>
             },
             CellKind::Eyeball => {
                 println!("Cell at ({}, {}) is an eyeball", X, Y);
+                let EE = world_data.critter_layer[*Y as usize][*X as usize].energy;
+                let O_u = EE * b_ps.C_EEtoAE; //Upper bound of allowable activation energy
+                let O_l = (O_u as f32 - O_u as f32 * (b_ps.C_E_percent as f32 / 100.0)).round() as i16; // Lower bound of allowable activation energy
+                
+                //Checking if the activiation energy is withen allowable and returning an error if not
+                if *power > O_u || *power < O_l {
+                    let tx = server_data.lock().await.get_tx_channel(soul_id);
+                    if let Some(tx) = tx {
+                        tx.send(Message::Text(format!("This Eyeball requires {} to {} Energy", O_u, O_l)));
+                    }
+                    continue;
+                }
 
-                let visual_pkg = visual_pkg_generator::generate_visual_pkg(&world_data, soul_id, X, Y, 3, 'N', 50.0);
+                let dir = &world_data.critter_layer[*Y as usize][*X as usize].orientation;
+                let mut radius = 0;
+                if dir == "C" {
+                    radius = (*power as f32 / b_ps.C_AEtoAction_cent as f32).round() as i32;
+                } else {
+                    radius = (*power as f32 / b_ps.C_AEtoAction_dir as f32).round() as i32;
+                }
+
+                let visual_pkg = visual_pkg_generator::generate_visual_pkg(&world_data, soul_id, X, Y, radius, dir, &b_ps.DirectionalEyeballFOV);
                 // Send the visual package to the client
                 let tx = server_data.lock().await.get_tx_channel(soul_id);
                 if let Some(tx) = tx {
