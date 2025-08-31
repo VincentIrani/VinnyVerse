@@ -25,7 +25,8 @@ WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 RED   = (255, 0, 0)
 BLUE  = (0, 0, 255)
-GREEN = (0, 255, 0)
+G
+
 async def read_input():
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, input, "> ")
