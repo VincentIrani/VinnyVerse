@@ -66,14 +66,12 @@ gameplay_buttons = [
     ocs.Button(screen.get_size()[0] - 100, 50, 30, 30, True, (r"assets\Buttons\Send_Button\send_released.png", r"assets\Buttons\Send_Button\send_hovered.png", r"assets\Buttons\Send_Button\send_pressed.png"), lambda: send_command()),
 ]
 
-#command_drop_up = ocs.DropUp(50, screen.get_size()[1] - 50, 100, ["Activate", "Build"])
-#command_drop_up_2 = ocs.DropUp(50, screen.get_size()[1] - 100, 100, ["Activate", "Build"])
-
-
 volume_slider = ocs.Slider(100, screen.get_size()[1] - 100, 300, 20, initial=1.0)
 
 username_box = ocs.text_input_box(screen.get_size()[0]/2, screen.get_size()[1]/2 + 100, 200, 30)
 soulid_box = ocs.text_input_box(screen.get_size()[0]/2, screen.get_size()[1]/2 + 150, 200, 30)
+
+input_button = ocs.InputSelector(100, screen.get_size()[1] - 150)
 
 # --- Screen drawing functions ---
 def main_menu():
@@ -99,8 +97,7 @@ def gameplay():
     screen.blit(title, (screen.get_width()//2 - title.get_width()//2, 100))
     for button in gameplay_buttons:
         button.draw(screen)
-    #command_drop_up.draw(screen)
-    #command_drop_up_2.draw(screen)
+    input_button.draw(screen)
 
 def is_valid_uuid(u):
     try:
@@ -168,7 +165,11 @@ def on_login_pressed():
 # --- Main loop ---
 running = True
 while running:
+    
+    # Event handling
     for event in pygame.event.get():
+        
+        #Killing the program if the 
         if event.type == pygame.QUIT:
             running = False
         
@@ -185,9 +186,9 @@ while running:
             case "gameplay":
                 for button in gameplay_buttons:
                     button.handle_event(event)
-                #command_drop_up.handle_event(event)
-                #command_drop_up_2.handle_event(event)
+                input_button.handle_event(event)
 
+    # Draw the current state
     match state:
         case "main_menu":
             main_menu()

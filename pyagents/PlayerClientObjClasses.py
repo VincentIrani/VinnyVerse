@@ -3,6 +3,8 @@ import json
 import websockets
 import pygame
 import sys
+from enum import Enum
+
 
 # Colors
 WHITE = (255, 255, 255)
@@ -104,6 +106,8 @@ class text_input_box:
         self.font = pygame.font.Font(None, font_size)
         self.active = False
 
+        self.length = w
+
     def handle_event(self, event):
         if event.type == pygame.MOUSEBUTTONDOWN:
             # Toggle active if clicked inside
@@ -121,7 +125,7 @@ class text_input_box:
 
     def draw(self, surface):
         txt_surface = self.font.render(self.text, True, self.color)
-        width = max(200, txt_surface.get_width() + 10)
+        width = max(self.length, txt_surface.get_width() + 10)
         self.rect.w = width
         surface.blit(txt_surface, (self.rect.x+5, self.rect.y+5))
         pygame.draw.rect(surface, self.color, self.rect, 2)
@@ -186,6 +190,8 @@ class DropUp:
         return self.options[self.selected_index]
 
 class CommandSelect:
+
+
     def __init__(self, x, y, font, default_index=0):
         self.rect = pygame.Rect(x, y, 75, 20)  # Main box position (bottom)
         self.font = pygame.font.SysFont(None, 18)
@@ -247,3 +253,176 @@ class CommandSelect:
 
     def get_selected(self):
         return self.options[self.selected_index]
+
+class InputSelector:
+    class Mode(Enum):
+        ACTIVATE = 0
+        BUILD = 1
+    class Tissue(Enum):
+        NULL = 0
+        TISSUE = 1
+        MUSCLE_N = 2; MUSCLE_S = 3; MUSCLE_E = 4; MUSCLE_W = 5
+        MOUTH_N = 6; MOUTH_S = 7; MOUTH_E = 8; MOUTH_W = 9
+        EYE_D_N = 10; EYE_D_S = 11; EYE_D_E = 12; EYE_D_W = 13; EYE_C = 14
+        BUTT_N = 15; BUTT_S = 16; BUTT_E = 17; BUTT_W = 18
+        ARMOR = 19
+        ANCHOR = 23
+
+    def __init__(self, x, y, default_index=0):
+        
+        self.mode = InputSelector.Mode.ACTIVATE # Initialize mode to ACTIVATE
+
+        self.x_pos = x
+        self.y_pos = y
+
+        self.b1_rect = pygame.Rect(x, y, 75, 20)  # Main box position
+        self.b1_pressed = False 
+        self.b1_hovered = False
+
+        self.build_tissue_rect = pygame.Rect(x + 100, y, 50, 50)  # Build Tissue box position
+        self.build_tissue_hovered = False
+        self.build_tissue_pressed = False
+
+        self.x_label = pygame.font.SysFont(None, 18).render("X:", True, BLACK)
+        self.x_box = text_input_box(x+200, y+10, 40, 20, font_size=18)
+        self.y_label = pygame.font.SysFont(None, 18).render("Y:", True, BLACK)
+        self.y_box = text_input_box(x+270, y+10, 40, 20, font_size=18)
+
+        self.power_box = text_input_box(x+300, y+10, 40, 20, font_size=18)
+
+        self.current_tissue = InputSelector.Tissue.NULL # Initialize tissue to NULL
+
+        #Importing first button images
+        self.img_b1_A_released = pygame.image.load(r"assets\Buttons\Input_Button\activate_released.png").convert_alpha()
+        self.img_b1_A_hovered = pygame.image.load(r"assets\Buttons\Input_Button\activate_hovered.png").convert_alpha()
+        self.img_b1_A_pressed = pygame.image.load(r"assets\Buttons\Input_Button\activate_pressed.png").convert_alpha()
+        self.img_b1_B_released = pygame.image.load(r"assets\Buttons\Input_Button\build_released.png").convert_alpha()
+        self.img_b1_B_hovered = pygame.image.load(r"assets\Buttons\Input_Button\build_hovered.png").convert_alpha()
+        self.img_b1_B_pressed = pygame.image.load(r"assets\Buttons\Input_Button\build_pressed.png").convert_alpha()
+        
+        # Importing Build Tissue Images
+        self.img_tis_null = pygame.image.load(r"assets\Buttons\Input_Button\build_pressed.png").convert_alpha()
+        self.img_tis_tissue = pygame.image.load(r"assets\Critter_Squares\Tissue\Tissue_0.png").convert_alpha()
+        self.img_tis_muscle = pygame.image.load(r"assets\Critter_Squares\Muscle\Muscle_0_d.png").convert_alpha()
+        self.img_tis_mouth = pygame.image.load(r"assets\Critter_Squares\Mouth\Mouth_0.png").convert_alpha()
+        self.img_tis_eye_c = pygame.image.load(r"assets\Critter_Squares\Eye\Eye_0_c.png").convert_alpha()
+        self.img_tis_eye_d = pygame.image.load(r"assets\Critter_Squares\Eye\Eye_0_d.png").convert_alpha()
+        self.img_tis_butt = pygame.image.load(r"assets\Critter_Squares\Butt\Butt_0_d.png").convert_alpha()
+        self.img_tis_armor = pygame.image.load(r"assets\Critter_Squares\Armor\Armor_0.png").convert_alpha()
+        self.img_tis_anchor = pygame.image.load(r"assets\Critter_Squares\Anchor\Anchor_0_d.png").convert_alpha()
+
+
+
+    def handle_event(self, event):
+        
+        mouse_pos = pygame.mouse.get_pos()
+        self.b1_hovered = self.b1_rect.collidepoint(mouse_pos)
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.b1_hovered:
+                self.b1_pressed = True
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            if self.b1_pressed and self.b1_hovered:
+                if self.mode == InputSelector.Mode.ACTIVATE:
+                    self.mode = InputSelector.Mode.BUILD
+                else:
+                    self.mode = InputSelector.Mode.ACTIVATE
+            self.b1_pressed = False
+
+        self.x_box.handle_event(event)
+        self.y_box.handle_event(event)
+
+        match self.mode:
+            case InputSelector.Mode.ACTIVATE:
+                pass
+            case InputSelector.Mode.BUILD:
+                self.build_tissue_hovered = self.build_tissue_rect.collidepoint(mouse_pos)
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if self.build_tissue_hovered:
+                        self.build_tissue_pressed = True
+                elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    if self.build_tissue_pressed and self.build_tissue_hovered:
+                        # Cycle through tissue types
+                        if self.current_tissue.value == len(InputSelector.Tissue) - 2:
+                            next_tissue_value = 0
+                        else:
+                            next_tissue_value = (self.current_tissue.value + 1) % len(InputSelector.Tissue)
+                        self.current_tissue = InputSelector.Tissue(next_tissue_value)
+                    self.build_tissue_pressed = False
+
+                
+
+    def draw(self, surface):
+        match self.mode:
+            case InputSelector.Mode.ACTIVATE:
+                if self.b1_pressed:
+                    img = self.img_b1_A_pressed
+                elif self.b1_hovered:
+                    img = self.img_b1_A_hovered
+                else:
+                    img = self.img_b1_A_released
+            case InputSelector.Mode.BUILD:
+                if self.b1_pressed:
+                    img = self.img_b1_B_pressed
+                elif self.b1_hovered:
+                    img = self.img_b1_B_hovered
+                else:
+                    img = self.img_b1_B_released
+
+                match self.current_tissue:
+                    case InputSelector.Tissue.NULL:
+                        tis_img = self.img_tis_null
+                    case InputSelector.Tissue.TISSUE:
+                        tis_img = self.img_tis_tissue
+                    case InputSelector.Tissue.MUSCLE_N:
+                        tis_img = pygame.transform.rotate(self.img_tis_muscle, 0)
+                    case InputSelector.Tissue.MUSCLE_S:
+                        tis_img = pygame.transform.rotate(self.img_tis_muscle, 180)
+                    case InputSelector.Tissue.MUSCLE_E:
+                        tis_img = pygame.transform.rotate(self.img_tis_muscle, 270)
+                    case InputSelector.Tissue.MUSCLE_W:
+                        tis_img = pygame.transform.rotate(self.img_tis_muscle, 90)
+                    case InputSelector.Tissue.MOUTH_N:
+                        tis_img = pygame.transform.rotate(self.img_tis_mouth, 0)
+                    case InputSelector.Tissue.MOUTH_S:
+                        tis_img = pygame.transform.rotate(self.img_tis_mouth, 180)
+                    case InputSelector.Tissue.MOUTH_E:
+                        tis_img = pygame.transform.rotate(self.img_tis_mouth, 270)
+                    case InputSelector.Tissue.MOUTH_W:
+                        tis_img = pygame.transform.rotate(self.img_tis_mouth, 90)
+                    case InputSelector.Tissue.EYE_D_N:
+                        tis_img = pygame.transform.rotate(self.img_tis_eye_d, 0)
+                    case InputSelector.Tissue.EYE_D_S:
+                        tis_img = pygame.transform.rotate(self.img_tis_eye_d, 180)
+                    case InputSelector.Tissue.EYE_D_E:
+                        tis_img = pygame.transform.rotate(self.img_tis_eye_d, 270)
+                    case InputSelector.Tissue.EYE_D_W:
+                        tis_img = pygame.transform.rotate(self.img_tis_eye_d, 90)
+                    case InputSelector.Tissue.EYE_C:
+                        tis_img = self.img_tis_eye_c
+                    case InputSelector.Tissue.BUTT_N:
+                        tis_img = pygame.transform.rotate(self.img_tis_butt, 0)
+                    case InputSelector.Tissue.BUTT_S:
+                        tis_img = pygame.transform.rotate(self.img_tis_butt, 180)
+                    case InputSelector.Tissue.BUTT_E:
+                        tis_img = pygame.transform.rotate(self.img_tis_butt, 270)
+                    case InputSelector.Tissue.BUTT_W:
+                        tis_img = pygame.transform.rotate(self.img_tis_butt, 90)
+                    case InputSelector.Tissue.ARMOR:
+                        tis_img = self.img_tis_armor
+                    case InputSelector.Tissue.ANCHOR:
+                        tis_img = self.img_tis_anchor
+
+                # Scale tissue image to fit box
+                tis_img = pygame.transform.scale(tis_img, (50, 50))
+                surface.blit(tis_img, self.build_tissue_rect.topleft)
+        
+
+        surface.blit(self.x_label, (self.x_pos + 160, self.y_pos + 3))
+        surface.blit(self.y_label, (self.x_pos + 230, self.y_pos + 3))
+
+
+        self.x_box.draw(surface)
+        self.y_box.draw(surface)
+
+        surface.blit(img, self.b1_rect.topleft)
